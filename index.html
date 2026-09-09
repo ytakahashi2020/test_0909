@@ -124,8 +124,6 @@
   .seg input:focus-visible + label { outline: 2px solid var(--sol); outline-offset: -2px; }
   .amount-row { display: flex; gap: 10px; align-items: center; }
   .amount-row input { flex: 1; }
-  .hint { font-size: 12.5px; color: var(--dim); margin: -4px 0 12px; }
-  .hint a { color: var(--usdc); }
 
   #log {
     list-style: none;
@@ -201,6 +199,18 @@
 
 <script src="https://unpkg.com/@solana/web3.js@1.95.8/lib/index.iife.min.js"
   onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/@solana/web3.js@1.95.8/lib/index.iife.min.js'"></script>
+<script type="module">
+  // web3.js の IIFE 版はトランザクション署名時に Node の Buffer を要求するが、ブラウザには無いので補う
+  if (typeof window.Buffer === "undefined") {
+    try {
+      const m = await import("https://esm.sh/buffer@6.0.3");
+      window.Buffer = m.Buffer;
+    } catch {
+      const m = await import("https://cdn.jsdelivr.net/npm/buffer@6.0.3/+esm");
+      window.Buffer = m.Buffer;
+    }
+  }
+</script>
 <script>
 (() => {
   const RPC = "https://api.devnet.solana.com";
@@ -253,6 +263,11 @@
   function requireLib() {
     if (typeof solanaWeb3 === "undefined") {
       throw new Error("@solana/web3.js が読み込めていません。ネットワーク接続と、CDN がブロックされていないか確認してください");
+    }
+  }
+  function requireBuffer() {
+    if (typeof window.Buffer === "undefined") {
+      throw new Error("Buffer ポリフィルがまだ読み込まれていません。数秒待ってからもう一度お試しください");
     }
   }
 
@@ -358,7 +373,7 @@
         { pubkey: solanaWeb3.SystemProgram.programId, isSigner: false, isWritable: false },
         { pubkey: pk(TOKEN_PROGRAM), isSigner: false, isWritable: false },
       ],
-      data: Uint8Array.from([1]) // CreateIdempotent
+      data: Buffer.from([1]) // CreateIdempotent
     });
   }
 
@@ -376,15 +391,33 @@
         { pubkey: dest, isSigner: false, isWritable: true },
         { pubkey: owner, isSigner: true, isWritable: false },
       ],
-      data
+      data: Buffer.from(data)
     });
   }
 
   async function signSendConfirm(tx) {
+    requireBuffer();
     const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
     tx.recentBlockhash = blockhash;
     tx.feePayer = pubkey;
-    const { signature } = await provider.signAndSendTransaction(tx);
+
+    // 署名前にシミュレーションして、失敗理由をログに出す
+    const sim = await connection.simulateTransaction(tx);
+    if (sim.value.err) {
+      (sim.value.logs || []).slice(-5).forEach(l => log("  " + l, "ng"));
+      throw new Error("シミュレーション失敗: " + JSON.stringify(sim.value.err));
+    }
+
+    let signature;
+    try {
+      ({ signature } = await provider.signAndSendTransaction(tx));
+    } catch (e) {
+      // Phantom が "Unexpected error" しか返さない場合は、署名だけ受け取って自分で送信する
+      if (e && e.code === 4001) throw new Error("署名がキャンセルされました");
+      log("signAndSendTransaction に失敗したため signTransaction 経由で再試行します");
+      const signed = await provider.signTransaction(tx);
+      signature = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: false });
+    }
     log("送信しました。確認を待っています... " + signature.slice(0, 8) + "…");
     const conf = await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed");
     if (conf.value.err) throw new Error("トランザクションが失敗しました: " + JSON.stringify(conf.value.err));
