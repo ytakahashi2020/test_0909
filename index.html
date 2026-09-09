@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Devnet ウォレット</title>
+<style>
+  :root {
+    --paper: #1a1f2b;
+    --ink: #e8ebf2;
+    --dim: #8b93a7;
+    --line: #2d3446;
+    --sol: #9c7cf5;
+    --usdc: #4fb0e6;
+    --ok: #6fcf97;
+    --ng: #f28b82;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
+    font-size: 15px;
+    line-height: 1.6;
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    padding: 40px 16px;
+  }
+  main { width: 100%; max-width: 560px; }
+  h1 {
+    font-size: 22px;
+    font-weight: 600;
+    margin: 0 0 4px;
+  }
+  h2 {
+    font-size: 15px;
+    font-weight: 600;
+    margin: 0 0 12px;
+  }
+  .net {
+    color: var(--dim);
+    font-size: 13px;
+    margin: 0 0 28px;
+  }
+  section {
+    border-top: 1px solid var(--line);
+    padding: 20px 0;
+  }
+  .addr {
+    font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+    font-size: 13px;
+    word-break: break-all;
+    color: var(--dim);
+    margin: 8px 0 12px;
+    min-height: 22px;
+  }
+  .balances {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+  .bal { padding: 14px 16px; border-radius: 10px; background: #222839; }
+  .bal .label { font-size: 13px; color: var(--dim); }
+  .bal .num {
+    font-size: 26px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    margin-top: 2px;
+  }
+  .bal.sol .num { color: var(--sol); }
+  .bal.usdc .num { color: var(--usdc); }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; }
+  button {
+    font: inherit;
+    font-size: 14px;
+    padding: 10px 16px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: #262d3f;
+    color: var(--ink);
+    cursor: pointer;
+    transition: background .12s, opacity .12s;
+  }
+  button:hover:not(:disabled) { background: #303851; }
+  button:focus-visible { outline: 2px solid var(--sol); outline-offset: 2px; }
+  button:disabled { opacity: .55; cursor: wait; }
+  button.primary { background: var(--sol); border-color: var(--sol); color: #14101f; }
+  button.primary:hover:not(:disabled) { background: #ad92ff; }
+
+  /* 送信フォーム */
+  .field { margin-bottom: 12px; }
+  .field label {
+    display: block;
+    font-size: 13px;
+    color: var(--dim);
+    margin-bottom: 4px;
+  }
+  input[type="text"], input[type="number"] {
+    font: inherit;
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: #222839;
+    color: var(--ink);
+  }
+  input#sendTo { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 13px; }
+  input:focus-visible { outline: 2px solid var(--sol); outline-offset: 1px; }
+  input:disabled { opacity: .55; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg label {
+    display: inline-block;
+    padding: 8px 14px;
+    font-size: 14px;
+    cursor: pointer;
+    color: var(--dim);
+    margin: 0;
+  }
+  .seg input { position: absolute; opacity: 0; width: 0; height: 0; }
+  .seg input:checked + label { background: #303851; color: var(--ink); }
+  .seg input:focus-visible + label { outline: 2px solid var(--sol); outline-offset: -2px; }
+  .amount-row { display: flex; gap: 10px; align-items: center; }
+  .amount-row input { flex: 1; }
+  .hint { font-size: 12.5px; color: var(--dim); margin: -4px 0 12px; }
+  .hint a { color: var(--usdc); }
+
+  #log {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+    font-size: 12.5px;
+    color: var(--dim);
+    max-height: 220px;
+    overflow-y: auto;
+  }
+  #log li { padding: 3px 0; border-bottom: 1px dashed var(--line); }
+  #log li.ok { color: var(--ok); }
+  #log li.ng { color: var(--ng); }
+  #log li time { opacity: .6; margin-right: 8px; }
+  #log li a { color: inherit; text-decoration: underline; }
+  .hidden { display: none; }
+  @media (prefers-reduced-motion: reduce) { button { transition: none; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Devnet ウォレット</h1>
+  <p class="net">Solana Devnet・api.devnet.solana.com</p>
+
+  <section>
+    <div class="row">
+      <button id="btnConnect" class="primary">Phantom を接続</button>
+      <button id="btnCopy" class="hidden">アドレスをコピー</button>
+    </div>
+    <div class="addr" id="addr">未接続</div>
+  </section>
+
+  <section>
+    <div class="balances">
+      <div class="bal sol"><div class="label">SOL</div><div class="num" id="balSol">–</div></div>
+      <div class="bal usdc"><div class="label">USDC</div><div class="num" id="balUsdc">–</div></div>
+    </div>
+    <div class="row">
+      <button id="btnRefresh" disabled>残高を更新</button>
+      <button id="btnSol" disabled>SOL をもらう</button>
+      <button id="btnUsdc" disabled>USDC をもらう</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>送信</h2>
+    <div class="field">
+      <label for="sendTo">送信先アドレス</label>
+      <input type="text" id="sendTo" placeholder="受取人の公開鍵" autocomplete="off" spellcheck="false" disabled>
+    </div>
+    <div class="field">
+      <label>通貨と金額</label>
+      <div class="amount-row">
+        <span class="seg">
+          <input type="radio" name="asset" id="assetSol" value="SOL" checked>
+          <label for="assetSol">SOL</label>
+          <input type="radio" name="asset" id="assetUsdc" value="USDC">
+          <label for="assetUsdc">USDC</label>
+        </span>
+        <input type="number" id="sendAmount" placeholder="0.0" min="0" step="any" inputmode="decimal" disabled>
+      </div>
+    </div>
+    <div class="row">
+      <button id="btnSend" class="primary" disabled>送信する</button>
+    </div>
+  </section>
+
+  <section>
+    <ul id="log"></ul>
+  </section>
+</main>
+
+<script src="https://unpkg.com/@solana/web3.js@1.95.8/lib/index.iife.min.js"
+  onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/@solana/web3.js@1.95.8/lib/index.iife.min.js'"></script>
+<script>
+(() => {
+  const RPC = "https://api.devnet.solana.com";
+  const USDC_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+  const USDC_DECIMALS = 6;
+  // 文字列で持ち、必要になった時に PublicKey 化する（ライブラリ未読込でもページを壊さない）
+  const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+  const ASSOCIATED_TOKEN_PROGRAM = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
+  const pk = s => new solanaWeb3.PublicKey(s);
+
+  const $ = id => document.getElementById(id);
+  const ui = {
+    connect: $("btnConnect"), copy: $("btnCopy"), refresh: $("btnRefresh"),
+    sol: $("btnSol"), usdc: $("btnUsdc"),
+    addr: $("addr"), balSol: $("balSol"), balUsdc: $("balUsdc"), log: $("log"),
+    sendTo: $("sendTo"), sendAmount: $("sendAmount"), send: $("btnSend")
+  };
+  const walletControls = [ui.refresh, ui.sol, ui.usdc, ui.sendTo, ui.sendAmount, ui.send];
+
+  let connection = null;
+  let pubkey = null;
+  let provider = null;
+
+  function log(msg, kind, link) {
+    const li = document.createElement("li");
+    if (kind) li.className = kind;
+    const t = document.createElement("time");
+    t.textContent = new Date().toLocaleTimeString("ja-JP", { hour12: false });
+    li.appendChild(t);
+    li.appendChild(document.createTextNode(msg));
+    if (link) {
+      li.appendChild(document.createTextNode(" "));
+      const a = document.createElement("a");
+      a.href = link.href; a.textContent = link.text;
+      a.target = "_blank"; a.rel = "noopener";
+      li.appendChild(a);
+    }
+    ui.log.prepend(li);
+  }
+
+  async function busy(btn, label, fn) {
+    const orig = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = label;
+    try { await fn(); }
+    catch (e) { log("エラー: " + (e && e.message ? e.message : String(e)), "ng"); }
+    finally { btn.textContent = orig; btn.disabled = false; }
+  }
+
+  function requireLib() {
+    if (typeof solanaWeb3 === "undefined") {
+      throw new Error("@solana/web3.js が読み込めていません。ネットワーク接続と、CDN がブロックされていないか確認してください");
+    }
+  }
+
+  function requireWallet() {
+    if (!pubkey) throw new Error("先に Phantom を接続してください");
+  }
+
+  async function copyAddress() {
+    requireWallet();
+    await navigator.clipboard.writeText(pubkey.toBase58());
+    log("アドレスをコピーしました", "ok");
+  }
+
+  function fmt(n, digits) {
+    return n.toLocaleString("ja-JP", { minimumFractionDigits: 0, maximumFractionDigits: digits });
+  }
+
+  function explorerTx(sig) {
+    return { href: `https://explorer.solana.com/tx/${sig}?cluster=devnet`, text: "Explorer で見る" };
+  }
+
+  async function fetchBalances() {
+    requireWallet();
+    const lamports = await connection.getBalance(pubkey);
+    const sol = lamports / solanaWeb3.LAMPORTS_PER_SOL;
+    ui.balSol.textContent = fmt(sol, 9);
+
+    const res = await connection.getParsedTokenAccountsByOwner(pubkey, {
+      mint: new solanaWeb3.PublicKey(USDC_MINT)
+    });
+    let raw = 0;
+    for (const { account } of res.value) {
+      raw += Number(account.data.parsed.info.tokenAmount.amount);
+    }
+    const usdc = raw / 10 ** USDC_DECIMALS;
+    ui.balUsdc.textContent = fmt(usdc, USDC_DECIMALS);
+    log(`残高: ${fmt(sol, 9)} SOL / ${fmt(usdc, USDC_DECIMALS)} USDC`, "ok");
+  }
+
+  async function connect() {
+    requireLib();
+    provider = window.phantom && window.phantom.solana;
+    if (!provider || !provider.isPhantom) {
+      throw new Error("Phantom が見つかりません。拡張機能を入れてから再読み込みしてください");
+    }
+    const resp = await provider.connect();
+    pubkey = new solanaWeb3.PublicKey(resp.publicKey.toString());
+    connection = new solanaWeb3.Connection(RPC, "confirmed");
+    ui.addr.textContent = pubkey.toBase58();
+    ui.copy.classList.remove("hidden");
+    ui.connect.textContent = "接続済み";
+    walletControls.forEach(el => el.disabled = false);
+    log("Phantom を接続しました: " + pubkey.toBase58(), "ok");
+    await fetchBalances();
+  }
+
+  async function faucet(url, name) {
+    await copyAddress();
+    window.open(url, "_blank", "noopener");
+    log(`${name} の蛇口を新しいタブで開きました。貼り付けて請求してください`);
+  }
+
+  // ---- 送信 ----
+
+  // 小数文字列 → 最小単位の BigInt（浮動小数点誤差を避ける）
+  function toBaseUnits(str, decimals) {
+    const s = String(str).trim();
+    if (!/^\d*\.?\d*$/.test(s) || s === "" || s === ".") throw new Error("金額の形式が正しくありません");
+    const [intPart = "0", fracPart = ""] = s.split(".");
+    if (fracPart.length > decimals) throw new Error(`小数点以下は ${decimals} 桁までです`);
+    const n = BigInt(intPart + fracPart.padEnd(decimals, "0"));
+    if (n <= 0n) throw new Error("金額は 0 より大きくしてください");
+    return n;
+  }
+
+  function parseRecipient() {
+    const v = ui.sendTo.value.trim();
+    if (!v) throw new Error("送信先アドレスを入力してください");
+    let recipient;
+    try { recipient = new solanaWeb3.PublicKey(v); }
+    catch { throw new Error("送信先アドレスが正しくありません"); }
+    if (recipient.equals(pubkey)) throw new Error("自分自身には送信できません");
+    return recipient;
+  }
+
+  function ata(owner, mint) {
+    return solanaWeb3.PublicKey.findProgramAddressSync(
+      [owner.toBuffer(), pk(TOKEN_PROGRAM).toBuffer(), mint.toBuffer()],
+      pk(ASSOCIATED_TOKEN_PROGRAM)
+    )[0];
+  }
+
+  // Associated Token Account を（存在しなければ）作成する命令
+  function ixCreateAtaIdempotent(payer, owner, mint) {
+    const addr = ata(owner, mint);
+    return new solanaWeb3.TransactionInstruction({
+      programId: pk(ASSOCIATED_TOKEN_PROGRAM),
+      keys: [
+        { pubkey: payer, isSigner: true, isWritable: true },
+        { pubkey: addr, isSigner: false, isWritable: true },
+        { pubkey: owner, isSigner: false, isWritable: false },
+        { pubkey: mint, isSigner: false, isWritable: false },
+        { pubkey: solanaWeb3.SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: pk(TOKEN_PROGRAM), isSigner: false, isWritable: false },
+      ],
+      data: Uint8Array.from([1]) // CreateIdempotent
+    });
+  }
+
+  // SPL Token の TransferChecked 命令
+  function ixTransferChecked(source, mint, dest, owner, amount, decimals) {
+    const data = new Uint8Array(10);
+    data[0] = 12; // TransferChecked
+    new DataView(data.buffer).setBigUint64(1, amount, true);
+    data[9] = decimals;
+    return new solanaWeb3.TransactionInstruction({
+      programId: pk(TOKEN_PROGRAM),
+      keys: [
+        { pubkey: source, isSigner: false, isWritable: true },
+        { pubkey: mint, isSigner: false, isWritable: false },
+        { pubkey: dest, isSigner: false, isWritable: true },
+        { pubkey: owner, isSigner: true, isWritable: false },
+      ],
+      data
+    });
+  }
+
+  async function signSendConfirm(tx) {
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+    tx.recentBlockhash = blockhash;
+    tx.feePayer = pubkey;
+    const { signature } = await provider.signAndSendTransaction(tx);
+    log("送信しました。確認を待っています... " + signature.slice(0, 8) + "…");
+    const conf = await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed");
+    if (conf.value.err) throw new Error("トランザクションが失敗しました: " + JSON.stringify(conf.value.err));
+    return signature;
+  }
+
+  async function sendSol(to, amountStr) {
+    const lamports = toBaseUnits(amountStr, 9);
+    const balance = BigInt(await connection.getBalance(pubkey));
+    if (lamports + 10000n > balance) throw new Error("SOL の残高が足りません（手数料分も必要です）");
+    const tx = new solanaWeb3.Transaction().add(
+      solanaWeb3.SystemProgram.transfer({ fromPubkey: pubkey, toPubkey: to, lamports })
+    );
+    const sig = await signSendConfirm(tx);
+    log(`${amountStr} SOL を ${to.toBase58().slice(0, 6)}… へ送信しました`, "ok", explorerTx(sig));
+  }
+
+  async function sendUsdc(to, amountStr) {
+    const amount = toBaseUnits(amountStr, USDC_DECIMALS);
+    const mint = new solanaWeb3.PublicKey(USDC_MINT);
+    const src = ata(pubkey, mint);
+    const dst = ata(to, mint);
+
+    const srcInfo = await connection.getTokenAccountBalance(src).catch(() => null);
+    const have = srcInfo ? BigInt(srcInfo.value.amount) : 0n;
+    if (have < amount) throw new Error("USDC の残高が足りません");
+
+    const tx = new solanaWeb3.Transaction();
+    const dstInfo = await connection.getAccountInfo(dst);
+    if (!dstInfo) {
+      tx.add(ixCreateAtaIdempotent(pubkey, to, mint));
+      log("受取人の USDC 口座がないため、同時に作成します（約 0.002 SOL）");
+    }
+    tx.add(ixTransferChecked(src, mint, dst, pubkey, amount, USDC_DECIMALS));
+    const sig = await signSendConfirm(tx);
+    log(`${amountStr} USDC を ${to.toBase58().slice(0, 6)}… へ送信しました`, "ok", explorerTx(sig));
+  }
+
+  async function send() {
+    requireWallet();
+    const to = parseRecipient();
+    const amountStr = ui.sendAmount.value.trim();
+    const asset = document.querySelector('input[name="asset"]:checked').value;
+    if (asset === "SOL") await sendSol(to, amountStr);
+    else await sendUsdc(to, amountStr);
+    ui.sendAmount.value = "";
+    await fetchBalances();
+  }
+
+  // ---- イベント ----
+
+  ui.connect.addEventListener("click", () =>
+    busy(ui.connect, "接続中...", async () => {
+      if (pubkey) { log("すでに接続しています"); return; }
+      await connect();
+    }).then(() => { if (pubkey) ui.connect.textContent = "接続済み"; })
+  );
+  ui.copy.addEventListener("click", () => busy(ui.copy, "コピー中...", copyAddress));
+  ui.refresh.addEventListener("click", () => busy(ui.refresh, "更新中...", fetchBalances));
+  ui.sol.addEventListener("click", () =>
+    busy(ui.sol, "処理中...", () => faucet("https://faucet.solana.com/", "SOL")));
+  ui.usdc.addEventListener("click", () =>
+    busy(ui.usdc, "処理中...", () => faucet("https://faucet.circle.com/", "USDC")));
+  ui.send.addEventListener("click", () => busy(ui.send, "送信中...", send));
+  ui.sendAmount.addEventListener("keydown", e => { if (e.key === "Enter") ui.send.click(); });
+
+  const p = window.phantom && window.phantom.solana;
+  if (p) {
+    p.on("disconnect", () => {
+      pubkey = null;
+      ui.addr.textContent = "未接続";
+      ui.copy.classList.add("hidden");
+      ui.connect.textContent = "Phantom を接続";
+      ui.balSol.textContent = "–";
+      ui.balUsdc.textContent = "–";
+      walletControls.forEach(el => el.disabled = true);
+      log("Phantom との接続が切れました");
+    });
+  }
+
+  window.addEventListener("load", () => {
+    if (typeof solanaWeb3 === "undefined") {
+      log("@solana/web3.js を読み込めませんでした。ファイルをブラウザで直接開き、ネットワークを確認してください", "ng");
+    }
+  });
+  log("ページを読み込みました。Phantom を接続してください");
+})();
+</script>
+</body>
+</html>
