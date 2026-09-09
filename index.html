@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>USDC Wallet (Devnet)</title>
+<script src="https://unpkg.com/@solana/web3.js@1.95.8/lib/index.iife.min.js"></script>
+<style>
+  body { margin: 0; background: #F7F9FC; color: #1B2430; font-family: system-ui, sans-serif; line-height: 1.6; }
+  main { max-width: 520px; margin: 0 auto; padding: 32px 20px 60px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: #5C6B7C; margin: 0 0 20px; font-size: 14px; }
+  .card { background: #fff; border: 2px solid #D9E0EA; border-radius: 12px; padding: 18px; margin-bottom: 14px; }
+  .card h2 { font-size: 15px; margin: 0 0 10px; color: #5C6B7C; }
+  .addr { font-family: ui-monospace, Menlo, monospace; font-size: 13px; word-break: break-all; background: #EEF2F7; padding: 8px 10px; border-radius: 8px; }
+  .bal { display: flex; gap: 12px; }
+  .bal div { flex: 1; background: #EEF2F7; border-radius: 10px; padding: 12px; }
+  .bal b { display: block; font-size: 24px; }
+  .bal span { font-size: 12px; color: #5C6B7C; }
+  button { font: inherit; font-weight: 700; border: 0; border-radius: 999px; padding: 10px 18px; cursor: pointer; background: #1B2430; color: #fff; }
+  button.alt { background: #fff; color: #1B2430; border: 2px solid #D9E0EA; }
+  button:disabled { opacity: .5; cursor: default; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  label { display: block; font-size: 13px; font-weight: 700; margin: 10px 0 4px; }
+  input { width: 100%; box-sizing: border-box; font: inherit; padding: 9px 10px; border: 2px solid #D9E0EA; border-radius: 8px; }
+  #log { font-size: 14px; white-space: pre-wrap; background: #1B2430; color: #E6EDF5; border-radius: 10px; padding: 12px; min-height: 60px; }
+  #log a { color: #8DE78F; }
+  .warn { font-size: 13px; color: #5C6B7C; margin-top: 8px; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>USDC Wallet <small style="font-weight:400;color:#5C6B7C">Devnet</small></h1>
+  <p class="sub">Phantom をつないで、Devnet の SOL と USDC を受け取り、USDC を送るだけの小さなアプリです。本物のお金は動きません。</p>
+
+  <div class="card">
+    <h2>1. ウォレット</h2>
+    <div id="connect-area">
+      <button id="connect">Phantom を接続</button>
+      <p class="warn" id="no-phantom" class="hidden"></p>
+    </div>
+    <div id="wallet-area" class="hidden">
+      <div class="addr" id="address"></div>
+      <div class="row">
+        <button class="alt" id="copy">アドレスをコピー</button>
+        <button class="alt" id="refresh">残高を更新</button>
+        <button class="alt" id="disconnect">切断</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card hidden" id="balance-card">
+    <h2>2. 残高</h2>
+    <div class="bal">
+      <div><b id="sol">-</b><span>SOL（手数料用）</span></div>
+      <div><b id="usdc">-</b><span>USDC</span></div>
+    </div>
+    <div class="row">
+      <button id="airdrop">SOL をもらう（Airdrop）</button>
+      <a href="https://faucet.circle.com/" target="_blank" rel="noopener"><button class="alt" type="button">USDC をもらう（Circle Faucet）</button></a>
+    </div>
+    <p class="warn">Airdrop が失敗するときは <a href="https://faucet.solana.com/" target="_blank" rel="noopener">faucet.solana.com</a> にアドレスを貼ってください。USDC は Circle Faucet で「Solana Devnet」を選び、上のアドレスを貼ると 20 USDC が届きます。</p>
+  </div>
+
+  <div class="card hidden" id="send-card">
+    <h2>3. USDC を送る</h2>
+    <label for="to">送り先アドレス</label>
+    <input id="to" placeholder="相手の Solana アドレス">
+    <label for="amount">金額（USDC）</label>
+    <input id="amount" type="number" min="0" step="0.01" placeholder="5">
+    <div class="row"><button id="send">送る</button></div>
+    <p class="warn">送るときに Phantom の確認画面が開きます。Devnet では「シミュレーションに失敗」と警告が出ることがありますが、続行して問題ありません。</p>
+  </div>
+
+  <div class="card">
+    <h2>ログ</h2>
+    <div id="log">まだ何もしていません。</div>
+  </div>
+</main>
+
+<script>
+const { Connection, PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } = solanaWeb3;
+
+// ---- 設定（Devnet）----
+const RPC_URL = 'https://api.devnet.solana.com';
+const USDC_MINT = new PublicKey('4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU'); // Circle の Devnet USDC
+const USDC_DECIMALS = 6;
+const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+const ATA_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
+
+const connection = new Connection(RPC_URL, 'confirmed');
+let provider = null;
+let owner = null;
+
+const $ = id => document.getElementById(id);
+function log(msg, link) {
+  const line = document.createElement('div');
+  line.textContent = msg;
+  if (link) { const a = document.createElement('a'); a.href = link; a.target = '_blank'; a.rel = 'noopener'; a.textContent = ' Explorer で見る'; line.appendChild(a); }
+  $('log').prepend(line);
+}
+function explorerTx(sig) { return 'https://explorer.solana.com/tx/' + sig + '?cluster=devnet'; }
+
+// ---- Phantom ----
+function getProvider() {
+  const p = window.phantom && window.phantom.solana;
+  return p && p.isPhantom ? p : null;
+}
+
+async function connect() {
+  provider = getProvider();
+  if (!provider) {
+    $('no-phantom').textContent = 'Phantom が見つかりません。拡張機能を入れて、ページを再読み込みしてください。';
+    $('no-phantom').classList.remove('hidden');
+    return;
+  }
+  try {
+    const res = await provider.connect();
+    owner = res.publicKey;
+    $('address').textContent = owner.toBase58();
+    $('connect-area').classList.add('hidden');
+    $('wallet-area').classList.remove('hidden');
+    $('balance-card').classList.remove('hidden');
+    $('send-card').classList.remove('hidden');
+    log('接続しました: ' + owner.toBase58());
+    await refresh();
+  } catch (e) {
+    log('接続をキャンセルしました。');
+  }
+}
+
+async function disconnect() {
+  if (provider) await provider.disconnect();
+  owner = null;
+  $('connect-area').classList.remove('hidden');
+  $('wallet-area').classList.add('hidden');
+  $('balance-card').classList.add('hidden');
+  $('send-card').classList.add('hidden');
+  log('切断しました。');
+}
+
+// ---- 残高 ----
+function ataOf(walletPubkey) {
+  return PublicKey.findProgramAddressSync(
+    [walletPubkey.toBytes(), TOKEN_PROGRAM_ID.toBytes(), USDC_MINT.toBytes()],
+    ATA_PROGRAM_ID
+  )[0];
+}
+
+async function refresh() {
+  if (!owner) return;
+  try {
+    const lamports = await connection.getBalance(owner);
+    $('sol').textContent = (lamports / LAMPORTS_PER_SOL).toFixed(4);
+    const accounts = await connection.getParsedTokenAccountsByOwner(owner, { mint: USDC_MINT });
+    let usdc = 0;
+    for (const a of accounts.value) usdc += a.account.data.parsed.info.tokenAmount.uiAmount || 0;
+    $('usdc').textContent = usdc.toFixed(2);
+  } catch (e) {
+    log('残高の取得に失敗: ' + e.message);
+  }
+}
+
+// ---- Airdrop ----
+async function airdrop() {
+  if (!owner) return;
+  $('airdrop').disabled = true;
+  log('Airdrop を申請中...');
+  try {
+    const sig = await connection.requestAirdrop(owner, 1 * LAMPORTS_PER_SOL);
+    const bh = await connection.getLatestBlockhash();
+    await connection.confirmTransaction({ signature: sig, ...bh });
+    log('1 SOL を受け取りました。', explorerTx(sig));
+    await refresh();
+  } catch (e) {
+    log('Airdrop に失敗しました（混雑か回数制限）。faucet.solana.com を使ってください。 ' + e.message);
+  }
+  $('airdrop').disabled = false;
+}
+
+// ---- 送金 ----
+function u64le(n) {
+  const b = new Uint8Array(8);
+  let v = BigInt(n);
+  for (let i = 0; i < 8; i++) { b[i] = Number(v & 0xffn); v >>= 8n; }
+  return b;
+}
+
+async function send() {
+  if (!owner) return;
+  let to;
+  try { to = new PublicKey($('to').value.trim()); } catch (e) { log('送り先アドレスが正しくありません。'); return; }
+  const amount = Number($('amount').value);
+  if (!(amount > 0)) { log('金額を入れてください。'); return; }
+  const raw = BigInt(Math.round(amount * 10 ** USDC_DECIMALS));
+
+  const fromAta = ataOf(owner);
+  const toAta = ataOf(to);
+
+  // 相手の USDC 口座がなければ作る（すでにあれば何もしない）
+  const createAta = new TransactionInstruction({
+    programId: ATA_PROGRAM_ID,
+    keys: [
+      { pubkey: owner, isSigner: true, isWritable: true },
+      { pubkey: toAta, isSigner: false, isWritable: true },
+      { pubkey: to, isSigner: false, isWritable: false },
+      { pubkey: USDC_MINT, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+    ],
+    data: new Uint8Array([1]), // CreateIdempotent
+  });
+
+  // TransferChecked: [12, amount(u64 LE), decimals(u8)]
+  const transfer = new TransactionInstruction({
+    programId: TOKEN_PROGRAM_ID,
+    keys: [
+      { pubkey: fromAta, isSigner: false, isWritable: true },
+      { pubkey: USDC_MINT, isSigner: false, isWritable: false },
+      { pubkey: toAta, isSigner: false, isWritable: true },
+      { pubkey: owner, isSigner: true, isWritable: false },
+    ],
+    data: new Uint8Array([12, ...u64le(raw), USDC_DECIMALS]),
+  });
+
+  $('send').disabled = true;
+  try {
+    const bh = await connection.getLatestBlockhash();
+    const tx = new Transaction({ feePayer: owner, recentBlockhash: bh.blockhash }).add(createAta, transfer);
+    log('Phantom で承認してください...');
+    const signed = await provider.signTransaction(tx);
+    const sig = await connection.sendRawTransaction(signed.serialize());
+    log('送信しました。確認を待っています...');
+    await connection.confirmTransaction({ signature: sig, ...bh });
+    log(amount + ' USDC を送りました。', explorerTx(sig));
+    await refresh();
+  } catch (e) {
+    log('送金に失敗: ' + e.message);
+  }
+  $('send').disabled = false;
+}
+
+// ---- イベント ----
+$('connect').addEventListener('click', connect);
+$('disconnect').addEventListener('click', disconnect);
+$('refresh').addEventListener('click', refresh);
+$('airdrop').addEventListener('click', airdrop);
+$('send').addEventListener('click', send);
+$('copy').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText(owner.toBase58()); log('アドレスをコピーしました。'); }
+  catch (e) { log('コピーできませんでした。アドレスを選択してコピーしてください。'); }
+});
+</script>
+</body>
+</html>
