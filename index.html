@@ -19,7 +19,9 @@
   .bal span { font-size: 12px; color: #5C6B7C; }
   button { font: inherit; font-weight: 700; border: 0; border-radius: 999px; padding: 10px 18px; cursor: pointer; background: #1B2430; color: #fff; }
   button.alt { background: #fff; color: #1B2430; border: 2px solid #D9E0EA; }
-  button:disabled { opacity: .5; cursor: default; }
+  button:disabled { opacity: .6; cursor: default; }
+  button.busy::before { content: ""; display: inline-block; width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; margin-right: 8px; vertical-align: -2px; animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
   .row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
   label { display: block; font-size: 13px; font-weight: 700; margin: 10px 0 4px; }
   input { width: 100%; box-sizing: border-box; font: inherit; padding: 9px 10px; border: 2px solid #D9E0EA; border-radius: 8px; }
@@ -57,10 +59,10 @@
       <div><b id="usdc">-</b><span>USDC</span></div>
     </div>
     <div class="row">
-      <button id="airdrop">SOL をもらう（Airdrop）</button>
-      <a href="https://faucet.circle.com/" target="_blank" rel="noopener"><button class="alt" type="button">USDC をもらう（Circle Faucet）</button></a>
+      <button id="get-sol">SOL をもらう（Solana Faucet）</button>
+      <button id="get-usdc" class="alt">USDC をもらう（Circle Faucet）</button>
     </div>
-    <p class="warn">Airdrop が失敗するときは <a href="https://faucet.solana.com/" target="_blank" rel="noopener">faucet.solana.com</a> にアドレスを貼ってください。USDC は Circle Faucet で「Solana Devnet」を選び、上のアドレスを貼ると 20 USDC が届きます。</p>
+    <p class="warn">どちらのボタンも、アドレスをコピーしてから faucet のサイトを新しいタブで開きます。SOL は faucet.solana.com でアドレスを貼って申請。USDC は Circle Faucet で「Solana Devnet」を選び、アドレスを貼ると 20 USDC が届きます。届いたら「残高を更新」を押してください。</p>
   </div>
 
   <div class="card hidden" id="send-card">
@@ -102,6 +104,19 @@ function log(msg, link) {
 }
 function explorerTx(sig) { return 'https://explorer.solana.com/tx/' + sig + '?cluster=devnet'; }
 
+// ボタンを「処理中」表示にする
+function busy(btn, label) {
+  btn.dataset.label = btn.textContent;
+  btn.textContent = label;
+  btn.classList.add('busy');
+  btn.disabled = true;
+}
+function done(btn) {
+  btn.textContent = btn.dataset.label || btn.textContent;
+  btn.classList.remove('busy');
+  btn.disabled = false;
+}
+
 // ---- Phantom ----
 function getProvider() {
   const p = window.phantom && window.phantom.solana;
@@ -115,18 +130,41 @@ async function connect() {
     $('no-phantom').classList.remove('hidden');
     return;
   }
+  busy($('connect'), 'Phantom を確認中...');
   try {
     const res = await provider.connect();
-    owner = res.publicKey;
-    $('address').textContent = owner.toBase58();
-    $('connect-area').classList.add('hidden');
-    $('wallet-area').classList.remove('hidden');
-    $('balance-card').classList.remove('hidden');
-    $('send-card').classList.remove('hidden');
+    setOwner(res.publicKey);
+    // Phantom 側でアカウントを切り替えたら、それに合わせる
+    provider.on('accountChanged', (pk) => {
+      if (pk) { setOwner(pk); log('アカウントが切り替わりました: ' + pk.toBase58()); refresh(); }
+      else { connect(); }
+    });
     log('接続しました: ' + owner.toBase58());
     await refresh();
   } catch (e) {
     log('接続をキャンセルしました。');
+  }
+  done($('connect'));
+}
+
+function setOwner(pk) {
+  owner = pk;
+  $('address').textContent = owner.toBase58();
+  $('connect-area').classList.add('hidden');
+  $('wallet-area').classList.remove('hidden');
+  $('balance-card').classList.remove('hidden');
+  $('send-card').classList.remove('hidden');
+}
+
+// 送金などの直前に、Phantom で今選ばれているアカウントと一致しているか確かめる
+async function ensureCurrentAccount() {
+  const current = provider && provider.publicKey;
+  if (!current) {
+    const res = await provider.connect();
+    setOwner(res.publicKey);
+  } else if (!current.equals(owner)) {
+    setOwner(current);
+    log('Phantom のアカウントに合わせました: ' + current.toBase58());
   }
 }
 
@@ -150,6 +188,7 @@ function ataOf(walletPubkey) {
 
 async function refresh() {
   if (!owner) return;
+  busy($('refresh'), '更新中...');
   try {
     const lamports = await connection.getBalance(owner);
     $('sol').textContent = (lamports / LAMPORTS_PER_SOL).toFixed(4);
@@ -157,26 +196,25 @@ async function refresh() {
     let usdc = 0;
     for (const a of accounts.value) usdc += a.account.data.parsed.info.tokenAmount.uiAmount || 0;
     $('usdc').textContent = usdc.toFixed(2);
+    log('残高を更新しました。');
   } catch (e) {
     log('残高の取得に失敗: ' + e.message);
   }
+  done($('refresh'));
 }
 
-// ---- Airdrop ----
-async function airdrop() {
+// ---- Faucet（蛇口）を開く ----
+async function copyAddress() {
+  try { await navigator.clipboard.writeText(owner.toBase58()); log('アドレスをコピーしました。'); return true; }
+  catch (e) { log('コピーできませんでした。アドレスを選択してコピーしてください。'); return false; }
+}
+async function openFaucet(btn, url, name) {
   if (!owner) return;
-  $('airdrop').disabled = true;
-  log('Airdrop を申請中...');
-  try {
-    const sig = await connection.requestAirdrop(owner, 1 * LAMPORTS_PER_SOL);
-    const bh = await connection.getLatestBlockhash();
-    await connection.confirmTransaction({ signature: sig, ...bh });
-    log('1 SOL を受け取りました。', explorerTx(sig));
-    await refresh();
-  } catch (e) {
-    log('Airdrop に失敗しました（混雑か回数制限）。faucet.solana.com を使ってください。 ' + e.message);
-  }
-  $('airdrop').disabled = false;
+  busy(btn, name + ' を開いています...');
+  await copyAddress();
+  window.open(url, '_blank', 'noopener');
+  log(name + ' を新しいタブで開きました。アドレスを貼って申請し、戻ったら「残高を更新」を押してください。');
+  setTimeout(() => done(btn), 1200);
 }
 
 // ---- 送金 ----
@@ -189,6 +227,7 @@ function u64le(n) {
 
 async function send() {
   if (!owner) return;
+  try { await ensureCurrentAccount(); } catch (e) { log('Phantom に接続できませんでした。'); return; }
   let to;
   try { to = new PublicKey($('to').value.trim()); } catch (e) { log('送り先アドレスが正しくありません。'); return; }
   const amount = Number($('amount').value);
@@ -224,33 +263,37 @@ async function send() {
     data: new Uint8Array([12, ...u64le(raw), USDC_DECIMALS]),
   });
 
-  $('send').disabled = true;
+  busy($('send'), 'Phantom で承認待ち...');
   try {
     const bh = await connection.getLatestBlockhash();
     const tx = new Transaction({ feePayer: owner, recentBlockhash: bh.blockhash }).add(createAta, transfer);
     log('Phantom で承認してください...');
     const signed = await provider.signTransaction(tx);
+    $('send').textContent = '送信中...';
     const sig = await connection.sendRawTransaction(signed.serialize());
     log('送信しました。確認を待っています...');
+    $('send').textContent = '確認待ち...';
     await connection.confirmTransaction({ signature: sig, ...bh });
     log(amount + ' USDC を送りました。', explorerTx(sig));
     await refresh();
   } catch (e) {
-    log('送金に失敗: ' + e.message);
+    if (/not been authorized/i.test(e.message)) {
+      log('送金に失敗: Phantom で選ばれているアカウントと、このページが接続したアカウントが違います。Phantom で送り元のアカウントを選び直してから、もう一度「送る」を押してください。');
+    } else {
+      log('送金に失敗: ' + e.message);
+    }
   }
-  $('send').disabled = false;
+  done($('send'));
 }
 
 // ---- イベント ----
 $('connect').addEventListener('click', connect);
 $('disconnect').addEventListener('click', disconnect);
 $('refresh').addEventListener('click', refresh);
-$('airdrop').addEventListener('click', airdrop);
+$('get-sol').addEventListener('click', () => openFaucet($('get-sol'), 'https://faucet.solana.com/', 'Solana Faucet'));
+$('get-usdc').addEventListener('click', () => openFaucet($('get-usdc'), 'https://faucet.circle.com/', 'Circle Faucet'));
 $('send').addEventListener('click', send);
-$('copy').addEventListener('click', async () => {
-  try { await navigator.clipboard.writeText(owner.toBase58()); log('アドレスをコピーしました。'); }
-  catch (e) { log('コピーできませんでした。アドレスを選択してコピーしてください。'); }
-});
+$('copy').addEventListener('click', copyAddress);
 </script>
 </body>
 </html>
